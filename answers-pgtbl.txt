@@ -1,0 +1,4 @@
+A1：page0是应用程序的代码段和数据段，page2为用户栈，page1应该是guard page，无物理地址实际映射，用于溢出检测。因此，进程不能读或写page1映射的内存。
+A2：三个 return -1 的条件分别为 srcva >= p->sz, srcva+len >= p->sz 和 srcva+len < srcva。第三个条件主要是进行溢出检测，防止无符号整数上溢。
+由于 srcva 和 len 均为 uint64 类型的变量，当 srcva < p->sz 但是 len 为一个极大的数如 0xffff...ffff(-1) 时，满足 srcva+len < p->sz 这一条件，
+但由于复制了大量内存，需要通过 srcva+len < srcva 条件检测溢出。

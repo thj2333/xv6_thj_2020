@@ -40,6 +40,7 @@ procinit(void)
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
+      p->kstack_pa = (uint64)pa;
   }
   kvminithart();
 }
@@ -113,6 +114,9 @@ found:
     return 0;
   }
 
+  mykvminit(&p->k_pagetable);
+  mykvmmap(p->k_pagetable, p->kstack, p->kstack_pa, PGSIZE, PTE_R | PTE_W);
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -142,6 +146,8 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  myfreewalk(p->k_pagetable);
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -220,6 +226,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  uvm2kvmcopy(p,0);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -239,9 +246,11 @@ int
 growproc(int n)
 {
   uint sz;
+  uint old_sz;
   struct proc *p = myproc();
 
   sz = p->sz;
+  old_sz = p->sz;
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
@@ -250,6 +259,15 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+  if(n > 0){
+    uvm2kvmcopy(p,old_sz);
+  }else{
+    for (int i = p->sz; i < old_sz; i += PGSIZE) {
+      pte_t* pte = walk(p->k_pagetable, i, 0);
+      *pte = 0;
+    }
+  }
   return 0;
 }
 
@@ -274,6 +292,9 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  // copy user pgtbl to kernel pgtbl
+  uvm2kvmcopy(np,0);
 
   np->parent = p;
 
@@ -473,11 +494,15 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
-        c->proc = 0;
+        c->proc = 0; // cpu dosen't run any process now
 
         found = 1;
       }
