@@ -1,0 +1,17 @@
+(1) Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+答: a0-a7。由 call.asm 中的 li a2,13 可知，13存放在 a2 寄存器中。
+
+(2) Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)
+答：由于li a,12 直接计算出 f(8)+1 的结果12，可知函数 f 和 g 直接被编译器内联优化了。
+
+(3) At what address is the function printf located?
+答：0x628。
+
+(4) What value is in the register ra just after the jalr to printf in main?
+答：ra保存的是函数调用后返回的地址，由 call.asm 可以看出为0x38。
+
+(5) 答：He110 World。解释：%x 按 16 进制输出，57616=0xe110；ASCII 码中 0x64 对应 d，
+0x6c 对应 l，0x72 对应 r，因为 RISC-V 是小端存储（低地址存 0x72），且 %s 从低地址开始读取数据输出，所以输出为 rld。
+
+(6) In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+答：a2 寄存器存储 printf 指令的第 2 个参数，所以输出为 a2 寄存器的值。
