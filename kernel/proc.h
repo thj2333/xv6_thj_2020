@@ -82,6 +82,17 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+struct VMA { 
+  uint64 addr;      // 起始地址
+  uint64 length;    // 长度
+  int prot;         // 保护位，可以为read/write/read_write
+  int flags;        // 标志位，可以为MapShared和MapPrivate：若为MapShared，则在内存中的脏数据需要写回文件，否则，不需要写回文件
+  int offset;       // 文件偏移量
+  int valid;        // 有效位，1表示有效，即VMA已经被使用，0表示无效，即VMA未被使用
+  uint64 bitmap;    // 位图，表示VMA代表的连续空间中页面是否被映射
+  struct file* f;   // 映射的文件
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -103,4 +114,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct VMA vma[16];
 };

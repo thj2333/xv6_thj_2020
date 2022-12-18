@@ -484,3 +484,196 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+struct VMA*
+alloc_vma()
+{
+  struct proc* p = myproc();
+  for (int i = 0; i < 16; i++) {
+    if (p->vma[i].valid == 0) {
+      return &(p->vma[i]);
+    }
+  }
+  return 0;
+}
+
+struct VMA*
+get_vma(uint64 va)
+{
+  struct proc* p = myproc();
+  for (int i = 0; i < 16; i++) {
+    struct VMA* temp = &(p->vma[i]);
+    if (temp->valid == 0)
+      continue;
+    if (temp->addr <= va && temp->addr + temp->length > va) {
+      return temp;
+    }
+  }
+  return 0;
+}
+
+uint64
+get_vma_addr(uint64 length)
+{
+  struct proc* p = myproc();
+  uint64 addr = PGROUNDUP(p->sz);
+  p->sz = addr + length;
+  return addr;
+}
+
+uint64
+sys_mmap()
+{
+  uint64 addr = 0, length = 0, offset = 0;
+  int prot = 0, flags = 0;
+  struct file *f;
+  if (argaddr(0, &addr) < 0) return -1;
+  if (argaddr(1, &length) < 0) return -1;
+  if (argint(2, &prot) < 0) return -1;
+  if (argint(3, &flags) < 0) return -1;
+  if (argfd(4, 0, &f) < 0) return -1;
+  if (argaddr(5, &offset) < 0) return -1;
+
+  if ((prot & PROT_WRITE) && !(f->writable) && !(flags & MAP_PRIVATE))
+    return -1;
+  if ((prot & PROT_READ) && !(f->readable))
+    return -1;
+
+  struct VMA* vma = alloc_vma();
+  if (vma == 0) return -1;
+
+  filedup(f);
+
+  vma->addr = get_vma_addr(length);
+  vma->length = length;
+  vma->f = f;
+  vma->flags = flags;
+  vma->prot = prot;
+  vma->offset = offset;
+  vma->valid = 1;
+
+  int page_num = length / PGSIZE + ((length % PGSIZE == 0) ? 0 : 1);
+  int mask = 1;
+  for (int i = 0; i < page_num; i++) {
+    vma->bitmap |= mask;
+    mask = mask << 1;
+  }
+  return vma->addr;
+}
+
+uint64
+clean_vma(struct VMA* vma, uint64 addr, uint64 length)
+{
+  int page_number = length / PGSIZE + ((length % PGSIZE == 0) ? 0 : 1);
+  int start = (addr - vma->addr) / PGSIZE;
+  for (int i = start; i < page_number; i++) {
+    vma->bitmap = vma->bitmap & (~(1 << i));
+  }
+  if (0 == vma->bitmap) {
+    fileclose(vma->f);
+    memset((void*)vma, 0, sizeof (struct VMA));
+  }
+  return 0;
+}
+
+uint64
+flush_content(struct VMA* vma, uint64 addr, uint64 length)
+{
+  struct proc* proc = myproc();
+  int page_number = length / PGSIZE + ((length % PGSIZE == 0) ? 0 : 1);
+  int start = (addr - vma->addr) / PGSIZE;
+  for (int i = start; i < page_number; i++) {
+      vma->f->off = PGSIZE * i;
+      filewrite(vma->f, vma->addr, PGSIZE);
+  }
+  uvmunmap(proc->pagetable, addr, page_number, 1);
+  return 0;
+}
+
+uint64
+sys_munmap()
+{
+  uint64 addr = 0, length = 0;
+  if (argaddr(0, &addr) < 0)
+    return -1;
+  if (argaddr(1, &length) < 0)
+    return -1;
+
+  struct VMA* vma = get_vma(addr);
+  if (0 == vma)
+    return -1;
+
+  // no need to write back
+  if (vma->flags & MAP_PRIVATE) {
+    return clean_vma(vma, addr, length);
+  }
+  // need to write in-memory content to file
+  uint64 ret = flush_content(vma, addr, length);
+  if (ret < 0)
+    return ret;
+
+  return clean_vma(vma, addr, length);
+}
+
+uint64
+lazy_mmap(uint64 scause, uint64 va)
+{
+  struct VMA* vma = get_vma(va);
+  if (vma == 0)
+    return -1;
+  if (scause == 15 && (!(vma->prot & PROT_WRITE)))
+    return -1;
+  if (scause == 13 && (!(vma->prot & PROT_READ)))
+    return -1;
+
+  // allocate new physical address
+  void* pa = kalloc();
+  if (kalloc() == 0)
+    return -1;
+  memset(pa, 0, PGSIZE);
+
+  struct proc* p = myproc();
+  // set pages permission
+  int flag = 0;
+  if (vma->prot & PROT_WRITE)
+    flag |= PTE_W;
+  if (vma->prot & PROT_READ)
+    flag |= PTE_R;
+  flag |= PTE_U;
+  flag |= PTE_X;
+
+  // map the virtual address and physical address
+  va = PGROUNDDOWN(va);
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, flag) < 0) {
+    kfree(pa);
+    return -1;
+  }
+
+  // read file content to memory
+  ilock(vma->f->ip);
+  readi(vma->f->ip, 0, (uint64)pa, vma->offset + va - vma->addr, PGSIZE);
+  iunlock(vma->f->ip);
+  return 0;
+}
+
+uint64
+unmap_vma(uint64 addr, uint64 length)
+{
+  struct VMA* vma = get_vma(addr);
+  if (0 == vma)
+    return -1;
+
+  int total = sizeof (uint64);
+  struct proc* proc = myproc();
+
+  uint64 bitmap = vma->bitmap;
+  for (int i = 0; i < total; i++) {
+    if ((bitmap & 1) != 0) {
+      uint64 addr = vma->addr + PGSIZE * i;
+      uvmunmap(proc->pagetable, addr, 1, 0);
+      bitmap = (bitmap >> 1);
+    }
+  }
+  return 0;
+}
