@@ -352,3 +352,7 @@ sfence_vma()
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
+
+// RISC-V 的 PTE 有 10 个标志位，其中第 8、9 位是为用户保留的
+// 将第 8 位作为 PTE_COW 标志，表示该 PTE 是否需要 copy-on-write
+#define PTE_COW (1L << 8)

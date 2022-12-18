@@ -65,3 +65,8 @@
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+// 记录每个物理页对应的引用计数的数组的大小
+#define ARR_MAX ((PHYSTOP - KERNBASE) >> 12)
+// 物理内存对应的数组下标
+#define ARR_INDEX(pa) ((((uint64)pa) - KERNBASE) >> 12)
